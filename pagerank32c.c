@@ -50,11 +50,6 @@
 #define	VECTOR		double*
 #define	GRAPH		double*	// DECIDERE LA RAPPRESENTAZIONE IN MEMORIA (dev'essere un puntatore)
 
-double calcolaDelta (double* d, int n);
-double* calcolaDifferenza (double* pr, double* temp, int n);
-double* calcolaP1(double* g, int n);
-double* calcolaP2 (double c, double* P1, int n);
-
 typedef struct {
 	int x;
 	int y;
@@ -75,6 +70,16 @@ typedef struct {
 	int silent;
 	int display;
 }params;
+
+double calcolaDeltaD (double* d, int n);
+//float calcolaDeltaS (float* d, int n);
+double* calcolaDifferenzaD (double* pr, double* temp, int n);
+//float* calcolaDifferenzaS (float* pr, float* temp, int n);
+//double* calcolaP2d (double c, double* P1, int n);
+//float* calcolaP2s (float c, float* P1, int n);
+double* calcolaPageRankD (params* input, double* p);
+//double* calcolaPageRankS (params* input, float* p);
+//void calcolaDeltaS (float* pr, float* temp, int n, float* delta);
 
 /*
  * 
@@ -215,7 +220,12 @@ void save_pageranks(char* filename, int n, VECTOR pagerank) {
 }
 
 extern void pagerank32(params* input);
-
+extern float* pagerank32s(float epsilon, int n, float* P2);
+extern float* calcolaP1s(float* g, int n);
+extern float* calcolaP2s (float c, float* P1, int n);
+extern double* calcolaP1d(double* g, int n);
+extern double* calcolaP2d (double c, double* P1, int n);
+extern void calcolaDeltaS (float* pr, float* temp, int n, float* delta);
 /*
  *	pagerank
  * 	====
@@ -234,26 +244,31 @@ void pagerank(params* input) {
 	// Codificare qui l'algoritmo risolutivo
 	// -------------------------------------------------
 	int n = input->N;
-	MATRIX p;
-	if (input->format == 0){
-		double* P1 = calcolaP1(input->G, n);
-		p = (MATRIX) calcolaP2(input->c,P1, n);
+	double* pr = get_block(sizeof(double), n);
+	if (input->format == 0){ //sparse
+		if (input->prec == 0){ //single precision
+			double* g = input->G;
+			float* gs = (float*) get_block(sizeof(float),n*n);
+			int i,j;
+			for (i=0;i<n;i++)
+				for (j=0;j<n;j++)
+					gs[i*n+j] = (float) g[i*n+j];
+			float* P1 = calcolaP1s(gs, n);
+			float* P2 = calcolaP2s((float) input->c,P1, n);
+			float epsilon = (float) input->eps;
+			float* temp = pagerank32s(epsilon,n,P2);
+			for (i=0;i<n;i++)
+				pr[i] = (double) temp[i];
+//			pr = calcolaPageRankS(input,P2);
+		}else{ //double precision
+			double* P1 = calcolaP1d(input->G, n);
+			MATRIX P2 = (MATRIX) calcolaP2d(input->c,P1, n);
+			pr = calcolaPageRankD(input,P2);
+		}
 	}
-	else
-		p = input->P;
-	double delta = 0.1;
-	double* pr = (double*) malloc (n*sizeof(double));
-	int i,j;
-	for (i = 0; i < n; i++)
-		pr[i] = 1.0/n;
-	while (delta > input->eps){
-		double* temp = (double*) malloc(n*sizeof(double));
-		for (j=0; j < n; j++)
-			for (i = 0; i < n; i++)
-				temp[j] += p[n*i+j]*pr[i];
-		double* d = calcolaDifferenza(pr,temp,n);
-		delta = calcolaDelta(d,n);
-		pr = temp;
+	else {//dense
+		MATRIX p = input->P;
+		pr = calcolaPageRankD(input,p);
 	}
 
 	//pagerank32(input); // Esempio di chiamata di funzione assembly
@@ -263,45 +278,119 @@ void pagerank(params* input) {
 	input->pagerank = pr;
 
 }
-double* calcolaP1(double* g, int n){
+
+double* calcolaPageRankS (params* input, float* p){
+	int n = input->N;
+	float delta = 0.1;
+	float epsilon = (float) input->eps;
 	int i,j;
-	double* p1 = (double*) malloc (n*n*sizeof(double));
-	double v = 1.0/n;
-	for (i = 0; i < n; i++){
-		int di = 0;
-		for (j = 0; j < n; j++){
-			if (g[i*n+j] == 1)
-				di++;
-		}
-		if (di==0)
-			for (j = 0; j < n; j++)
-				p1[i*n+j]=v;
-		else
-			for (j = 0; j < n; j++)
-				p1[i*n+j]= g[i*n+j]/di;
+	float* pr = (float*) malloc (n*sizeof(float));
+	for (i = 0; i < n; i++)
+		pr[i] = 1.0/n;
+	while (delta > epsilon){
+		float* temp = (float*) malloc(n*sizeof(float));
+		for (j=0; j < n; j++)
+			for (i = 0; i < n; i++)
+				temp[j] += p[n*i+j]*pr[i];
+		calcolaDeltaS(pr,temp,n,&delta);
+		pr = temp;
 	}
-	return p1;
+	double* res = (double*) malloc (n*sizeof(double));
+	for (i = 0; i < n; i++)
+		res[i] = (double) pr[i];
+	return res;
 }
 
-double* calcolaP2 (double c, double* P1, int n){
+double* calcolaPageRankD (params* input, double* p){
+	int n = input->N;
+	double delta = 0.1;
 	int i,j;
-	double* p2 = (double*) malloc (n*n*sizeof(double));
-	for (i = 0; i < n; i++){
-		for (j = 0; j<n; j++){
-			p2[i*n+j]=c*P1[i*n+j]+(1-c)*(1.0/n);
-		}
+	double* pr = (double*) malloc (n*sizeof(double));
+	for (i = 0; i < n; i++)
+		pr[i] = 1.0/n;
+	while (delta > input->eps){
+		double* temp = (double*) malloc(n*sizeof(double));
+		for (j=0; j < n; j++)
+			for (i = 0; i < n; i++)
+				temp[j] += p[n*i+j]*pr[i];
+		double* d = calcolaDifferenzaD(pr,temp,n);
+		delta = calcolaDeltaD(d,n);
+		pr = temp;
 	}
-	return p2;
+	return pr;
 }
+//
+//void calcolaDeltaS (float* pr, float* temp, int n, float* delta){
+//	float risultato = 0.0;
+//	int i;
+//	for (i=0; i<n;i++){
+//		risultato += fabs(pr[i]-temp[i]);
+//	}
+//	*delta = risultato;
+//}
 
-double* calcolaDifferenza (double* pr, double* temp, int n){
+
+
+//double* calcolaP1C(double* g, int n){
+////	int i,j;
+////	double* p1 = (double*) malloc (n*n*sizeof(double));
+////	double v = 1.0/n;
+////	for (i = 0; i < n; i++){
+////		int di = 0;
+////		for (j = 0; j < n; j++){
+////			if (g[i*n+j] == 1)
+////				di++;
+////		}
+////		if (di==0)
+////			for (j = 0; j < n; j++)
+////				p1[i*n+j]=v;
+////		else
+////			for (j = 0; j < n; j++)
+////				p1[i*n+j]= g[i*n+j]/di;
+////	}
+//	double* p1 = (double*) calcolaP1(g,n);
+//	return p1;
+//}
+
+//double* calcolaP2d (double c, double* P1, int n){
+//	int i,j;
+//	double* p2 = (double*) malloc (n*n*sizeof(double));
+//	for (i = 0; i < n; i++){
+//		for (j = 0; j<n; j++){
+//			p2[i*n+j]=c*P1[i*n+j]+(1-c)*(1.0/n);
+//		}
+//	}
+//	return p2;
+//}
+//
+//float* calcolaP2s (float c, float* P1, int n){
+//	int i,j;
+//	float* p2 = (float*) malloc (n*n*sizeof(float));
+//	for (i = 0; i < n; i++){
+//		for (j = 0; j<n; j++){
+//			p2[i*n+j]=c*P1[i*n+j]+(1-c)*(1.0/n);
+//		}
+//	}
+//	return p2;
+//}
+
+double* calcolaDifferenzaD (double* pr, double* temp, int n){
 	int i;
 	double* d = (double*) malloc (n*sizeof(double));
 	for (i = 0; i < n; i++)
 		d[i] = (double) pr[i]-temp[i];
 	return d;
 }
-double calcolaDelta (double* d, int n){
+
+//float* calcolaDifferenzaS (float* pr, float* temp, int n){
+//	int i;
+//	float* d = (float*) malloc (n*sizeof(float));
+//	for (i = 0; i < n; i++)
+//		d[i] = pr[i]-temp[i];
+//	return d;
+//}
+
+double calcolaDeltaD (double* d, int n){
 	int i;
 	double delta = 0.0;
 	for (i = 0; i < n; i++)
@@ -309,6 +398,15 @@ double calcolaDelta (double* d, int n){
 	delta = sqrt(delta);
 	return delta;
 }
+
+//float calcolaDeltaS (float* d, int n){
+//	int i;
+//	float delta = 0.0;
+//	for (i = 0; i < n; i++)
+//		delta += d[i]*d[i];
+//	delta = sqrt(delta);
+//	return delta;
+//}
 
 #define	SPARSE	0
 #define	DENSE	1
